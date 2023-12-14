@@ -1,4 +1,4 @@
-package at.naskilla.keyspaces;
+package at.willhaben.springboot2keyspaces;
 
 import com.datastax.oss.driver.api.core.CqlSession;
 import lombok.experimental.UtilityClass;
@@ -48,9 +48,9 @@ public class KeyspaceServiceFactory {
         return sessionFactory;
     }
 
-    public static CassandraMappingContext mappingContext(String packageName) throws ClassNotFoundException {
+    public static CassandraMappingContext mappingContext(String... packageNames) throws ClassNotFoundException {
         var context = new CassandraMappingContext();
-        context.setManagedTypes(CassandraManagedTypes.fromIterable(CassandraEntityClassScanner.scan(packageName)));
+        context.setManagedTypes(CassandraManagedTypes.fromIterable(CassandraEntityClassScanner.scan(packageNames)));
 
         return context;
     }

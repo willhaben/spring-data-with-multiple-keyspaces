@@ -1,62 +1,69 @@
-# Spring Boot Data Cassandra With Multiple Keyspaces
+# Spring Boot 3.2.x Application using Cassandra With Multiple Keyspaces
 
 ## Introduction
-Disclaimer: Whether or not to use multiple keyspaces within a single application is a discussion for a different time, we
-want to present the solution we managed to find for the problem at hand.
+Disclaimer: Whether or not multiple keyspaces should be used within a single application is a discussion for a different time. Herein, 
+we present the solution we managed to find for the problem at hand.
 
-We use AWS Keyspaces for storing some of our data here at willhaben. In one of our services
-we need to use data from multiple of the keyspaces defined.
-While adding the connection to the second keyspace into our codebase we ran into an issue: Spring Boot Data Cassandra does not support using
-multiple keyspaces out of the box.
 
-While we were able to find some resources explaining solutions on how to get it working,
-we were not able to set it up for various reasons. Within [this article](https://www.codingame.com/playgrounds/13647/multiple-keyspaces-with-spring-data-cassandra)
-the appraoch seems to have worked with Spring Boot versions before 3.x.x, but with the new setup the autoconfiguration
-of Spring required us to define a single `CqlSession` bean - which we needed more than 1 of for our keyspaces.
+Here at willhaben, we use AWS Keyspaces to store some of our data. For one of our services we need to aggregate data 
+from multiple keysapces. When setting this up in practice, while adding the connection to the second keyspace into our codebase, we ran into an issue: 
+Spring Data Cassandra does not support using multiple keyspaces out of the box - at least not in version 3.2.x.
 
-[Other solutions](https://www.codingame.com/playgrounds/13689/multiple-keyspaces-using-a-single-spring-data-cassandratemplate) build upon not to use Spring Data `CrudRepositories`
-and to specify the keyspaces dynamically on the query. We did not really want to go this route to take advantage of the automatic
-query generation since the actual queries were pretty straightforward in the end and we wanted to avoid the maintenance effort.
+Although we found resources providing solutions for how to make it work, we still encountered difficulties in setting the connection up 
+for various reasons. [This article](https://www.codingame.com/playgrounds/13647/multiple-keyspaces-with-spring-data-cassandra) demonstrates an approach that seems to have worked with Spring Boot versions 
+before 3. But the autoconfiguration setup of Spring Boot 3.2.x. requires that a single `CqlSession` bean is defined - 
+as the example code in the link instead creates multiple `CqlSession` beans, our application will not start properly.
+
+[Other solutions](https://www.codingame.com/playgrounds/13689/multiple-keyspaces-using-a-single-spring-data-cassandratemplate) build upon avoiding the use of Spring Data `CrudRepositories`, and specifying the keyspace dynamically when 
+writing the query. However, we found that these were not ideal as we wished to take advantage of automatic query generation, 
+since we only needed pre-implemented queries, and we did not want the maintenance effort of writing queries manually.
+
 
 ## Implementing configurations for using multiple keyspaces in a single application
 
-### Define our 2 entities and repositories
+The code for the example can be found [Github](TODO).
+### Defining our entities and repositories
 
-To make future extensions easier, we should put each entity and the respective repositories into separate packages.
-We can put all of them into the same package, but this will require us to exactly specify each entity and repository instead
-being able to give the package name - which would mean if we would like to extend the schema with another table, we'd also need
-to touch the configuration for sure. I would like to avoid this, so in the example we created the Tables and repositories in
-their own subpackages `keyspace1` and `keyspace2`. The rest is up to your needs - for the example we did not speicfy any 
-special queries or complex datastructures.
+To make future extensions easier to utilise, we have separated put each entity and its respective repositories into packages.
+Alternatively, if they were all grouped in the same package, but this would require us to specify each entity and repository, rather than
+simply giving the package name - which would mean that if we wanted to extend the schema with another table, we would need
+to modify the configuration for sure. In the example, we set up subpackages for each keyspace (`keyspace1` and `keyspace2`), 
+where we create the entities and repositories for the respective keyspace.
 
-### Disable Spring Boot Data Cassandra autoconfigurations
+```java
+@Table("A")
+public record A(
+        @PrimaryKeyColumn(name = "a", type = PrimaryKeyType.PARTITIONED) UUID a,
+        @PrimaryKeyColumn(name = "b", type = PrimaryKeyType.CLUSTERED) String b,
+        @Column("c") String c
+) { }
+```
 
-When defining more than 1 `CqlSession` bean your spring boot application will no longer start.
+### Disabling Spring Boot Data Cassandra autoconfigurations
+
+When defining more than one `CqlSession` bean, the Spring Boot application will no longer start.
 This is due to the `CassandraDataAutoConfiguration` and `CassandraReactiveDataAutoConfiguration`, which define a lot of 
-typically useful beans using `@ConditionalOnMissingBean`. But we need multiple `CqlSession` beans, one per keyspace we want to use. 
-The constructors of the auto configurations expect a single `CqlSession` as dependency, which results in even if not a 
-single other bean is initialised by the configuration having 2 beans of `CqlSession` will break the startup. The simple 
-solution for this is to exclude these autoconfiguration classes as we don't need them anyway - this step might not be necessary
-in future Spring Boot versions. 
+typically useful beans using `@ConditionalOnMissingBean` but depend on a single `CqlSession` bean in the constructor. 
+Instead, we need multiple `CqlSession` beans, one per keyspace we want to use. The solution to make this work is to exclude these autoconfiguration 
+classes, as we don't need them anyway - note that this step might not be necessary in future Spring Boot versions. 
 
 ```java
 @SpringBootApplication(exclude = {CassandraDataAutoConfiguration.class, CassandraReactiveDataAutoConfiguration.class})
 public class Application {
-    
     public static void main(String[] args) {
         SpringApplication.run(Application.class, args);
     }
-    
 }
 ``` 
 
-### Define a configuration for our first keyspace
+### Defining a configuration for our first keyspace
 
-We already know we need 2 keyspaces, so the way we set up our first configuration already takes this into consideration. 
-The `@EnableCassandraRepositories` annotation is on our configuration instead of using it on the `Application` class itself
-to emphasize that this configuration is used for one of our keyspace packages. We specify which  `CassandraOperations` bean
-to use by giving it a qualified name - in the example `aCassandraTemplate` - and specify the packages to enable this configuration for - in 
-the example the `keyspace1` package.
+We already know we need two keyspaces, and so this is accounted for in the way we set up our first configuration. 
+The `@EnableCassandraRepositories` annotation is made on our configuration, instead of using it on the `Application` class itself,
+to emphasise that this configuration is used for one of our keyspace packages. We specify which `CassandraOperations` bean
+to use - in the example, `aCassandraTemplate` - and we specify the packages for which to enable this configuration - in 
+the example, the `keyspace1` package. This ensures that all `CrudRespository` instances within the provided package are correctly
+instantiated.
 
 ```java
 @Configuration
@@ -67,40 +74,37 @@ the example the `keyspace1` package.
 public class Keyspace1Configuration {}
 ```
 
-We inject all the necessary configuration parameters from our properties using the `@Value` annotations. In this case
-we cannot use the auto configuration `spring` properties, so we qualify them using our keyspace name as prefix. As in our
-case we want to automatically create the keyspaces in the tests we also inject the schema action - which for production
+We inject all the necessary configuration parameters from our properties using the `@Value` annotations. In this case,
+we cannot use the `spring` properties directly, so we qualify them using our keyspace name as a prefix. In our
+case, we want to automatically create the keyspaces in the tests, so we also inject the schema action - which, for production,
 should definitely be set to `NONE`.
 
 ```java
-    @Value("${a.cassandra.contact-points}")
-    private String contactPoints;
-
-    @Value("${a.cassandra.local-datacenter}")
-    private String localDataCenter;
-
-    @Value("${a.cassandra.username}")
-    private String username;
-
-    @Value("${a.cassandra.password}")
-    private String password;
-
-    @Value("${a.cassandra.schema-action}")
-    private String schemaAction;
-
-    @Value("${a.keyspace-name}")
-    private String keySpaceName;
+// inject all the necessary configuration parameters from our properties
+@Value("${a.cassandra.contact-points}")
+private String contactPoints;
+@Value("${a.cassandra.local-datacenter}")
+private String localDataCenter;
+@Value("${a.cassandra.username}")
+private String username;
+@Value("${a.cassandra.password}")
+private String password;
+@Value("${a.cassandra.schema-action}")
+private String schemaAction;
+@Value("${a.keyspace-name}")
+private String keySpaceName;
 ```
 
-Now the fun part starts. We need to create all the beans Spring requires to use the repositories. This includes in addition
-to the actual `CqlSession` also configurations on which entities are mapped within this configuration
-and should be possible to be mapped by our ORM mapper. In our example below we also automatically create the keyspace - 
-which we do for simplicity in testing but should not be done in a production environment typically. There also might be other
-configurations within the `SessionBuilderConfigurer`necessary - but that's not topic of this post.
+We need to create all the beans that Spring requires to use the repositories. In addition
+to the actual `CqlSession`, this also includes configurations around the entities that represent the tables how to map
+data from the database to the Java dcode. In our example, we also automatically create the keyspace - 
+which we do for simplicity in testing, though we stress that this should not be carried out in a production environment. 
+Additionally, we should note that there may be other configurations within the `SessionBuilderConfigurer` necessary to get a successful connection - but that's not topic of 
+this post.
 
-We have to qualify every single bean, as we'll create a second configuration with the same beans afterward for the 
-second keyspace. I've included the full configuration below. Running the service with a single keyspace and this configuration
-will work without any issues. But we do not want to stop there.
+We name every single bean, which is necessary as we then create a second configuration with the same beans afterwards for the 
+second keyspace. The full configuration is shown below and in the example code. Running the service with a single keyspace 
+and this configuration will work without any issues. But we do not want to stop there.
 
 ```java
 @Configuration
@@ -110,7 +114,7 @@ will work without any issues. But we do not want to stop there.
 )
 public class Keyspace2Configuration {
 
-    public static final String PACKAGE_NAME = "at.naskilla.keyspaces.keyspace1";
+    public static final String PACKAGE_NAME = "at.willhaben.springboot2keyspaces.keyspace1";
 
     @Value("${a.cassandra.contact-points}")
     private String contactPoints;
@@ -129,13 +133,11 @@ public class Keyspace2Configuration {
 
     @Value("${a.keyspace-name}")
     private String keySpaceName;
-
-
+    
     @Bean("aSessionBuilderConfigurer")
     public SessionBuilderConfigurer sessionBuilderConfigurer() {
         return sessionBuilder -> sessionBuilder.withAuthCredentials(username, password);
     }
-
 
     @Bean("aSession")
     public CqlSessionFactoryBean session(@Qualifier("aSessionBuilderConfigurer") SessionBuilderConfigurer sessionBuilderConfigurer) {
@@ -190,11 +192,11 @@ public class Keyspace2Configuration {
 }
 ```
 
-### Define a configuration for our second keyspace
+### Defining a configuration for our second keyspace
 
-Defining the second configuration for our `keyspace2` is quite easy. We can simply copy the existing configuration
-and replace all `a` prefixes with `b` prefixes and voilà - we'd be done. As we don't like too much code duplication and to
-make configuration changes easier I would suggest to create a dedicated property source for the properties that stay the same:
+Defining the configuration for `keyspace2` is quite easy. One straightforward option is simply to copy the existing configuration, 
+replace all `a` prefixes with `b` prefixes and voilà - you're done. But we don't like code duplication, and another approach
+can make configuration changes easier. Our suggestions is to create a dedicated property source for the properties that stay the same.
 
 ```java
 @Component
@@ -214,8 +216,8 @@ public class KeyspaceProperties {
 }
 ```  
 
-In addition creating a factory to build the beans makes the configuration also easier, that way we the configuration gets 
-a lot shorter (check the example code to see how the factory was created):
+Creating a factory in which to build the beans also makes the configuration easier to set up as it becomes 
+a lot shorter (check out the example code to see how the factory is defined).
 
 ```java
 @Configuration
@@ -226,7 +228,7 @@ a lot shorter (check the example code to see how the factory was created):
 @RequiredArgsConstructor
 public class Keyspace2Configuration {
 
-    public static final String PACKAGE_NAME = "at.naskilla.keyspaces.keyspace2";
+    public static final String PACKAGE_NAME = "at.willhaben.springboot2keyspaces.keyspace2";
 
     @Value("${b.keyspace-name}")
     private String keySpaceName;
@@ -270,12 +272,13 @@ public class Keyspace2Configuration {
 }
 ```
 
-## Testing our configurations
+### Testing our configurations
 
-Now that we have our 2 configurations, we also want to test them. For this we are using Testcontainers which start a 
-`Cassandra` container. In our configuration we also create the keyspaces automatically - this can and should be done in other
-ways of course but for the purpose of the example we take some shortcuts. The setup also configures the necessary parameters for spring to be
-able to connect to the created Cassandra. 
+Now we have our two configurations and we want to test them. To do so, we use the `Testcontainers` framework. We start a 
+`Cassandra` container to use temporarily for our tests. In our configuration, we also create the keyspaces automatically - this can and should be done in other
+ways but for the purpose of this example we take some shortcuts. Additionally, in this setup we configure the parameters for Spring to connect to Cassandra. 
+If we inspect the Spring Data logs we can see that our queries are executed against
+the correct keyspaces - likewise, in a deployed environment, you should see the data going to the right keyspaces. 
 
 ```java
 @SpringBootTest
@@ -336,3 +339,87 @@ class RepositoriesIT {
     }
 }
 ```
+
+## Taking it one step further
+
+The above examples use two separate tables and two separate keyspaces - matching the challenge we faced.
+But out of curiosity, we wanted to see if a multi-tenancy-like approach could be implemented in this way - so
+the same entity could definition be used for both keyspaces. To test this out, we define a third entity `C`. Of course, we could duplicate 
+the entity per keyspace package, but this would require the rest of our system to know that this entity exists in 
+separate sources. To achieve that, we'd have to rely on inheritance, or we would need to implement duplicate mapping logic to a global DTO, 
+and we would risk ending up with out-of-sync entity definitions.
+
+```java
+@Table("C")
+public record C(@PrimaryKeyColumn(name = "a", type = PrimaryKeyType.PARTITIONED) UUID a,
+                @PrimaryKeyColumn(name = "b", type = PrimaryKeyType.CLUSTERED) String b,
+                @Column("c") String c) {}
+```
+
+We also need a repository to access the data:
+```java
+@NoRepositoryBean
+public interface CRepository extends MapIdCassandraRepository<C> {
+    @Query
+    C findByA(UUID a);
+}
+``` 
+
+But how do we reference this single repository in two keyspaces? Here, we hit the limits of our current solution without requiring 
+code duplication, as each repository can only use a single `CassandraTemplate`. This means we need to provide separate repositories. 
+We can prefix them with either the keyspace name if it's very clear the keyspace name stays static, or we must somehow signify 
+why there are two keyspaces (e.g. `Legacy`, `Eu/Us`, etc.). By using a common interface, which is implemented by the keyspace-specific repository definitions,
+to define the queries, we can avoid further duplication. 
+
+```java
+public interface Keyspace2CRepository extends CRepository {
+}
+```
+
+To enable this table to be used in our keyspaces we need to scan the package of the new table from both of our 
+configurations.
+
+```java
+@Bean("bMappingContext")
+public CassandraMappingContext mappingContext() throws ClassNotFoundException {
+    return KeyspaceServiceFactory.mappingContext(PACKAGE_NAME, C.PACKAGE_NAME);
+}
+```
+
+If we test our solution, we find that we can use the same partition and clustering key but set our values differently, 
+and as long as we write in separate keyspaces, our entries remain. We would still have to implement the actual logic of our multi-tenancy approach 
+- but this is up to you and your specific use case. 
+
+```java
+@Test
+void given2ValuesWithSameId_whenPersistingValueInBothKeyspaces_thenValueBeReadById() {
+    // Given
+    UUID commonId = UUID.randomUUID();
+    C c1 = new C(commonId, "test1", "test1");
+    // Using the same id but different, still both should be readable from the table
+    C c2 = new C(commonId, "test1", "test2");
+    keyspace1CRepository.insert(c1);
+    keyspace2CRepository.insert(c2);
+
+    // When
+    C cFromKeyspace1 = keyspace1CRepository.findByA(commonId);
+    C cFromKeyspace2 = keyspace2CRepository.findByA(commonId);
+
+    // Then
+    assertThat(cFromKeyspace1)
+            .isEqualTo(c1);
+    assertThat(cFromKeyspace2)
+            .isEqualTo(c2);
+}
+```
+
+## Conclusion
+
+In sum, a setup of two or more separate Cassandra keyspaces within the same Spring Boot application, achieved by using 
+Spring Data Cassandra requires quite a bit of configuration but is totally possible. The following steps should be taken:
+
+* Disable the autoconfiguration classes provided by Spring, so we can define multiple `CqlSession` beans
+* Introduce one configuration per keyspace, in order to separate the access by using separate beans
+* Specify which entity classes and repositories are relevant for the current keyspace 
+
+We hope that future versions of Spring Data Cassandra will support this setup with less need for custom configuration.  

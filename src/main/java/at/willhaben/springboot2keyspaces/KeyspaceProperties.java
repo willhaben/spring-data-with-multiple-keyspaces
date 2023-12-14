@@ -1,4 +1,4 @@
-package at.naskilla.keyspaces;
+package at.willhaben.springboot2keyspaces;
 
 
 import lombok.Data;

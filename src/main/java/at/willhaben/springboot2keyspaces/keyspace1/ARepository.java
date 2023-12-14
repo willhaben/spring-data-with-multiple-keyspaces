@@ -1,4 +1,4 @@
-package at.naskilla.keyspaces.keyspace1;
+package at.willhaben.springboot2keyspaces.keyspace1;
 
 import org.springframework.data.cassandra.repository.MapIdCassandraRepository;
 

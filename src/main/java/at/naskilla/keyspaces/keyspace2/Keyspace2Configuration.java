@@ -1,10 +1,11 @@
-package at.naskilla.keyspaces.keyspace1;
+package at.naskilla.keyspaces.keyspace2;
 
 import at.naskilla.keyspaces.KeyspaceProperties;
 import at.naskilla.keyspaces.KeyspaceServiceFactory;
 import com.datastax.oss.driver.api.core.CqlSession;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -26,51 +27,51 @@ import java.util.List;
 
 @Configuration
 @EnableCassandraRepositories(
-        cassandraTemplateRef = "aCassandraTemplate",
-        basePackages = Keyspace1Configuration.PACKAGE_NAME
+        cassandraTemplateRef = "bCassandraTemplate",
+        basePackages = Keyspace2Configuration.PACKAGE_NAME
 )
 @RequiredArgsConstructor
-public class Keyspace1Configuration {
+public class Keyspace2Configuration {
 
-    public static final String PACKAGE_NAME = "at.naskilla.keyspaces.keyspace1";
+    public static final String PACKAGE_NAME = "at.naskilla.keyspaces.keyspace2";
 
-    @Value("${a.keyspace-name}")
+    @Value("${b.keyspace-name}")
     private String keySpaceName;
 
     private final KeyspaceProperties keyspaceProperties;
 
 
-    @Bean("aSessionBuilderConfigurer")
+    @Bean("bSessionBuilderConfigurer")
     public SessionBuilderConfigurer sessionBuilderConfigurer() {
         return KeyspaceServiceFactory
                 .sessionBuilderConfigurer(keyspaceProperties.getUsername(),
                         keyspaceProperties.getPassword());
     }
 
-    @Bean("aSession")
-    public CqlSessionFactoryBean session(@Qualifier("aSessionBuilderConfigurer") SessionBuilderConfigurer sessionBuilderConfigurer) {
+    @Bean("bSession")
+    public CqlSessionFactoryBean session(@Qualifier("bSessionBuilderConfigurer") SessionBuilderConfigurer sessionBuilderConfigurer) {
         return KeyspaceServiceFactory.session(sessionBuilderConfigurer, keyspaceProperties.getContactPoints(), keyspaceProperties.getLocalDataCenter(), keySpaceName);
     }
 
-    @Bean("aSessionFactory")
-    public SessionFactoryFactoryBean sessionFactory(@Qualifier("aSession") CqlSession session, @Qualifier("aConverter") CassandraConverter converter) {
+    @Bean("bSessionFactory")
+    public SessionFactoryFactoryBean sessionFactory(@Qualifier("bSession") CqlSession session, @Qualifier("bConverter") CassandraConverter converter) {
         return KeyspaceServiceFactory.sessionFactory(session, converter, keyspaceProperties.getSchemaAction());
     }
 
-    @Bean("aMappingContext")
+    @Bean("bMappingContext")
     public CassandraMappingContext mappingContext() throws ClassNotFoundException {
         return KeyspaceServiceFactory.mappingContext(PACKAGE_NAME);
     }
 
-    @Bean("aConverter")
-    public CassandraConverter converter(@Qualifier("aSession") CqlSession session,
-                                        @Qualifier("aMappingContext") CassandraMappingContext mappingContext) {
+    @Bean("bConverter")
+    public CassandraConverter converter(@Qualifier("bSession") CqlSession session,
+                                        @Qualifier("bMappingContext") CassandraMappingContext mappingContext) {
         return KeyspaceServiceFactory.converter(session, mappingContext);
     }
 
-    @Bean("aCassandraTemplate")
-    public CassandraOperations cassandraTemplate(@Qualifier("aSessionFactory") SessionFactory sessionFactory,
-                                                 @Qualifier("aConverter") CassandraConverter converter) {
+    @Bean("bCassandraTemplate")
+    public CassandraOperations cassandraTemplate(@Qualifier("bSessionFactory") SessionFactory sessionFactory,
+                                                 @Qualifier("bConverter") CassandraConverter converter) {
         return new CassandraTemplate(sessionFactory, converter);
     }
 

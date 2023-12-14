@@ -29,6 +29,27 @@ to touch the configuration for sure. I would like to avoid this, so in the examp
 their own subpackages `keyspace1` and `keyspace2`. The rest is up to your needs - for the example we did not speicfy any 
 special queries or complex datastructures.
 
+### Disable Spring Boot Data Cassandra autoconfigurations
+
+When defining more than 1 `CqlSession` bean your spring boot application will no longer start.
+This is due to the `CassandraDataAutoConfiguration` and `CassandraReactiveDataAutoConfiguration`, which define a lot of 
+typically useful beans using `@ConditionalOnMissingBean`. But we need multiple `CqlSession` beans, one per keyspace we want to use. 
+The constructors of the auto configurations expect a single `CqlSession` as dependency, which results in even if not a 
+single other bean is initialised by the configuration having 2 beans of `CqlSession` will break the startup. The simple 
+solution for this is to exclude these autoconfiguration classes as we don't need them anyway - this step might not be necessary
+in future Spring Boot versions. 
+
+```java
+@SpringBootApplication(exclude = {CassandraDataAutoConfiguration.class, CassandraReactiveDataAutoConfiguration.class})
+public class Application {
+    
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+    
+}
+``` 
+
 ### Define a configuration for our first keyspace
 
 We already know we need 2 keyspaces, so the way we set up our first configuration already takes this into consideration. 
@@ -74,9 +95,10 @@ should definitely be set to `NONE`.
 Now the fun part starts. We need to create all the beans Spring requires to use the repositories. This includes in addition
 to the actual `CqlSession` also configurations on which entities are mapped within this configuration
 and should be possible to be mapped by our ORM mapper. In our example below we also automatically create the keyspace - 
-which we do for simplicity in testing but should never be done in a production environment. 
+which we do for simplicity in testing but should not be done in a production environment typically. There also might be other
+configurations within the `SessionBuilderConfigurer`necessary - but that's not topic of this post.
 
-Also, we have to qualify every single bean, as we'll create a second configuration with the same beans afterward for the 
+We have to qualify every single bean, as we'll create a second configuration with the same beans afterward for the 
 second keyspace. I've included the full configuration below. Running the service with a single keyspace and this configuration
 will work without any issues. But we do not want to stop there.
 
@@ -170,23 +192,147 @@ public class Keyspace2Configuration {
 
 ### Define a configuration for our second keyspace
 
-### Disable Spring Boot Data Cassandra autoconfigurations
-
-When defining more than 1 `CqlSession` bean your spring boot application will no longer start.
-This is due to the `CassandraDataAutoConfiguration` and `CassandraReactiveDataAutoConfiguration`, which define a lot of 
-typically useful beans using `@ConditionalOnMissingBean`. This would mean if we define them ourselfs - as we do for using
-multiple keyspaces they are not initialised. But the constructors of the auto configurations expect a single `CqlSession`
-as dependency, which results in even if not a single other bean is initialised by the configuration having 2 beans of
-`CqlSession` will break the startup. The simple solution for this is to exclude these autoconfiguration classes as we don't
-need them anyway. 
+Defining the second configuration for our `keyspace2` is quite easy. We can simply copy the existing configuration
+and replace all `a` prefixes with `b` prefixes and voilà - we'd be done. As we don't like too much code duplication and to
+make configuration changes easier I would suggest to create a dedicated property source for the properties that stay the same:
 
 ```java
-@SpringBootApplication(exclude = {CassandraDataAutoConfiguration.class, CassandraReactiveDataAutoConfiguration.class})
-public class Application {
-    
-    public static void main(String[] args) {
-        SpringApplication.run(Application.class, args);
-    }
-    
+@Component
+@ConfigurationProperties(prefix = "cassandra")
+@Data
+public class KeyspaceProperties {
+
+    private String contactPoints;
+
+    private String localDataCenter;
+
+    private String username;
+
+    private String password;
+
+    private String schemaAction;
 }
-``` 
+```  
+
+In addition creating a factory to build the beans makes the configuration also easier, that way we the configuration gets 
+a lot shorter (check the example code to see how the factory was created):
+
+```java
+@Configuration
+@EnableCassandraRepositories(
+        cassandraTemplateRef = "bCassandraTemplate",
+        basePackages = Keyspace2Configuration.PACKAGE_NAME
+)
+@RequiredArgsConstructor
+public class Keyspace2Configuration {
+
+    public static final String PACKAGE_NAME = "at.naskilla.keyspaces.keyspace2";
+
+    @Value("${b.keyspace-name}")
+    private String keySpaceName;
+
+    private final KeyspaceProperties keyspaceProperties;
+
+
+    @Bean("bSessionBuilderConfigurer")
+    public SessionBuilderConfigurer sessionBuilderConfigurer() {
+        return KeyspaceServiceFactory
+                .sessionBuilderConfigurer(keyspaceProperties.getUsername(),
+                        keyspaceProperties.getPassword());
+    }
+
+    @Bean("bSession")
+    public CqlSessionFactoryBean session(@Qualifier("bSessionBuilderConfigurer") SessionBuilderConfigurer sessionBuilderConfigurer) {
+        return KeyspaceServiceFactory.session(sessionBuilderConfigurer, keyspaceProperties.getContactPoints(), keyspaceProperties.getLocalDataCenter(), keySpaceName);
+    }
+
+    @Bean("bSessionFactory")
+    public SessionFactoryFactoryBean sessionFactory(@Qualifier("bSession") CqlSession session, @Qualifier("bConverter") CassandraConverter converter) {
+        return KeyspaceServiceFactory.sessionFactory(session, converter, keyspaceProperties.getSchemaAction());
+    }
+
+    @Bean("bMappingContext")
+    public CassandraMappingContext mappingContext() throws ClassNotFoundException {
+        return KeyspaceServiceFactory.mappingContext(PACKAGE_NAME);
+    }
+
+    @Bean("bConverter")
+    public CassandraConverter converter(@Qualifier("bSession") CqlSession session,
+                                        @Qualifier("bMappingContext") CassandraMappingContext mappingContext) {
+        return KeyspaceServiceFactory.converter(session, mappingContext);
+    }
+
+    @Bean("bCassandraTemplate")
+    public CassandraOperations cassandraTemplate(@Qualifier("bSessionFactory") SessionFactory sessionFactory,
+                                                 @Qualifier("bConverter") CassandraConverter converter) {
+        return new CassandraTemplate(sessionFactory, converter);
+    }
+}
+```
+
+## Testing our configurations
+
+Now that we have our 2 configurations, we also want to test them. For this we are using Testcontainers which start a 
+`Cassandra` container. In our configuration we also create the keyspaces automatically - this can and should be done in other
+ways of course but for the purpose of the example we take some shortcuts. The setup also configures the necessary parameters for spring to be
+able to connect to the created Cassandra. 
+
+```java
+@SpringBootTest
+@Testcontainers
+class RepositoriesIT {
+
+    @Container
+    public static final CassandraContainer cassandra
+            = (CassandraContainer) new CassandraContainer("cassandra:3.11.2").withExposedPorts(9042);
+
+    static {
+        cassandra.start();
+    }
+
+    @Autowired
+    private ARepository aRepository;
+
+    @Autowired
+    private BRepository bRepository;
+
+    @BeforeAll
+    static void setupCassandraConnectionProperties() {
+        System.setProperty("a.keyspace-name", "a_keyspace");
+        System.setProperty("b.keyspace-name", "b_keyspace");
+        System.setProperty("cassandra.username", cassandra.getUsername());
+        System.setProperty("cassandra.password", cassandra.getPassword());
+        System.setProperty("cassandra.schema-action", "CREATE_IF_NOT_EXISTS");
+        System.setProperty(
+                "cassandra.contact-points",
+                "%s:%s".formatted(cassandra.getHost(), cassandra.getMappedPort(9042)));
+        System.setProperty("cassandra.local-datacenter", cassandra.getLocalDatacenter());
+    }
+
+    @BeforeEach
+    void setUp() {
+        aRepository.deleteAll();
+        bRepository.deleteAll();
+    }
+
+    @Test
+    void givenValueInsertedOneOrTheOther_whenReadAll_thenValuesReturnedInExpectedKeyspaces() {
+        // Given
+        A a = new A(UUID.randomUUID(), "test", "test");
+        aRepository.insert(a);
+
+        B b = new B(UUID.randomUUID(), "test", "test");
+        bRepository.insert(b);
+
+        // When
+        List<B> allB = bRepository.findAll();
+        List<A> allA = aRepository.findAll();
+
+        // Then
+        assertThat(allB)
+                .containsExactly(b);
+        assertThat(allA)
+                .containsExactly(a);
+    }
+}
+```
